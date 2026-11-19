@@ -14,6 +14,10 @@ The application SHALL provide a transparent topmost skill bar and a separate con
 - **WHEN** the user enters edit mode from display mode
 - **THEN** the application SHALL show the editing controls without moving or resizing any tile
 
+#### Scenario: Temporarily hide the floating bar
+- **WHEN** the user hides the bar from the control window in either mode
+- **THEN** the bar SHALL hide and pause preview capture until the user shows it again in the current session
+
 ### Requirement: Per-tile appearance
 The application SHALL expose independent scale, opacity, contrast, and saturation controls for each tile. Each control SHALL accept typed percentages and offer a per-property reset. Zero saturation SHALL produce grayscale. Scaling SHALL preserve the source aspect ratio and map source pixels one to one at 100% on the destination display.
 
@@ -25,10 +29,16 @@ The application SHALL expose independent scale, opacity, contrast, and saturatio
 Edit mode SHALL allow direct selection by clicking a tile. The selected tile SHALL have a visible bounding outline with corner and side handles. Dragging the tile body SHALL move it and dragging a handle SHALL resize it proportionally. Changes SHALL be reflected in the control window and saved in the active layout.
 
 #### Scenario: Select and move multiple tiles
-- **WHEN** the user drags from empty bar space or holds the left button on a tile before dragging
+- **WHEN** the user drags from empty bar space or holds the left button on a previously unselected tile before dragging
 - **THEN** the editor SHALL select the tiles intersecting the marquee and show their selection in the bar and control window
 - **WHEN** the user drags any selected tile
 - **THEN** the selected tiles SHALL move by the same offset, preserving relative positions at the canvas boundaries
+
+#### Scenario: Fine-tune selected tiles
+- **WHEN** the user presses WASD or an arrow key in the tile list or floating editor
+- **THEN** each selected tile SHALL move by one physical pixel in that direction within the canvas bounds, and the displayed coordinates SHALL track its offset from the canvas origin
+- **WHEN** the user holds the left button on an already selected tile before dragging
+- **THEN** dragging SHALL move the existing selection regardless of hold duration
 
 #### Scenario: Move and scale a selected tile
 - **WHEN** the user clicks a tile, drags its body, then drags one of its bounding box handles

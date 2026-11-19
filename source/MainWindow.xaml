@@ -48,7 +48,7 @@
             <TextBlock Text="MOBA 技能栏" FontSize="25" FontWeight="SemiBold" />
             <StackPanel Orientation="Horizontal" Margin="0,10,0,6">
                 <Button x:Name="ModeButton" Click="ToggleMode" />
-                <Button Content="移回主屏" Click="ResetBar" />
+                <Button x:Name="BarVisibilityButton" Click="ToggleBarVisibility" />
             </StackPanel>
             <TextBlock x:Name="ModeHint" Foreground="#BCC9D5" />
         </StackPanel>
@@ -70,8 +70,18 @@
             <Button x:Name="RenameTileButton" Content="重命名" Click="RenameTile" />
             <Button x:Name="RemoveButton" Content="移除技能格" Click="RemoveTile" />
         </StackPanel>
-        <ListBox x:Name="TileList" Grid.Row="3" SelectionMode="Extended" DisplayMemberPath="Name" MinHeight="65"
-                 AutomationProperties.Name="技能格" SelectionChanged="SelectTile" />
+        <ListBox x:Name="TileList" Grid.Row="3" SelectionMode="Extended" MinHeight="65"
+                 HorizontalContentAlignment="Stretch" AutomationProperties.Name="技能格" SelectionChanged="SelectTile">
+            <ListBox.ItemTemplate>
+                <DataTemplate>
+                    <DockPanel>
+                        <TextBlock DockPanel.Dock="Right" Text="{Binding PositionText}" Margin="10,0,2,0"
+                                   ToolTip="相对技能栏内容区左上角的物理像素坐标" />
+                        <TextBlock Text="{Binding Name}" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" />
+                    </DockPanel>
+                </DataTemplate>
+            </ListBox.ItemTemplate>
+        </ListBox>
         <StackPanel x:Name="Appearance" Grid.Row="4" Margin="0,12,0,0">
             <TextBlock x:Name="SourceSummary" Foreground="#BCC9D5" Margin="0,0,0,7" />
             <Grid>

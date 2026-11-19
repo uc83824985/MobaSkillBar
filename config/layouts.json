@@ -4,8 +4,8 @@
     {
       "Id": "56ada7a4-4a9a-4918-8ab4-e43ea6534c2e",
       "Name": "\u9ED8\u8BA4\u5E03\u5C40",
-      "Left": 1187,
-      "Top": 594,
+      "Left": 1131,
+      "Top": 520,
       "Tiles": [
         {
           "Id": "437f1044-1574-4b8d-b6e6-9d046860405b",
@@ -17,11 +17,11 @@
             "Width": 62,
             "Height": 61
           },
-          "X": 85,
-          "Y": 30,
+          "X": 56,
+          "Y": 31,
           "Scale": 1,
-          "Opacity": 1,
-          "Contrast": 1,
+          "Opacity": 0.5,
+          "Contrast": 1.5,
           "Saturation": 1
         },
         {
@@ -34,11 +34,11 @@
             "Width": 61,
             "Height": 61
           },
-          "X": 153,
-          "Y": 30,
+          "X": 126,
+          "Y": 31,
           "Scale": 1,
-          "Opacity": 1,
-          "Contrast": 1,
+          "Opacity": 0.5,
+          "Contrast": 1.5,
           "Saturation": 1
         },
         {
@@ -51,11 +51,11 @@
             "Width": 52,
             "Height": 52
           },
-          "X": 228,
-          "Y": 8,
+          "X": 195,
+          "Y": 13,
           "Scale": 1,
-          "Opacity": 1,
-          "Contrast": 1,
+          "Opacity": 0.5,
+          "Contrast": 1.5,
           "Saturation": 1
         },
         {
@@ -68,11 +68,11 @@
             "Width": 52,
             "Height": 52
           },
-          "X": 229,
-          "Y": 60,
+          "X": 195,
+          "Y": 65,
           "Scale": 1,
-          "Opacity": 1,
-          "Contrast": 1,
+          "Opacity": 0.5,
+          "Contrast": 1.5,
           "Saturation": 1
         }
       ]

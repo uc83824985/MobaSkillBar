@@ -18,6 +18,7 @@ public partial class MainWindow : Window
     private readonly DispatcherTimer saveTimer;
     private DisplayInfo[] displays = [];
     private bool editing;
+    private bool barHidden;
     private bool selecting;
     private bool refreshingControls = true;
     private bool previewActive;
@@ -36,6 +37,8 @@ public partial class MainWindow : Window
         displayRefresh.Tick += (_, _) => RefreshDisplays();
         saveTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(250) };
         saveTimer.Tick += (_, _) => Save();
+        PreviewKeyDown += NudgeSelectedTiles;
+        bar.PreviewKeyDown += NudgeSelectedTiles;
         ShowNotice(warning);
         RefreshPresetSelector();
         LoadLayout();
@@ -104,13 +107,31 @@ public partial class MainWindow : Window
     private void UpdateMode()
     {
         ModeButton.Content = editing ? "完成编辑" : "编辑悬浮栏";
-        ModeHint.Text = editing ? "拖动空白处或长按技能格后拖动可框选，拖动选中格可一起移动。单选时拖动控制点缩放。" : "显示模式 · 鼠标可穿透悬浮栏。";
+        bool canShowBar = editing || bar.Views.Count > 0;
+        BarVisibilityButton.IsEnabled = canShowBar;
+        BarVisibilityButton.Content = barHidden || !canShowBar ? "显示悬浮栏" : "隐藏悬浮栏";
+        ModeHint.Text = barHidden ? "悬浮栏已隐藏。" : editing
+            ? "拖动空白处框选，拖动选中格一起移动。WASD 或方向键微调 1 像素，单选时拖动控制点缩放。"
+            : "显示模式 · 鼠标可穿透悬浮栏。";
         if (!IsLoaded) return;
-        bar.SetMode(editing, selecting, displays);
-        SetPreviewActive(!selecting && bar.Views.Count > 0);
+        bar.SetMode(editing, selecting || barHidden, displays);
+        SetPreviewActive(bar.IsVisible && bar.Views.Count > 0);
     }
 
-    private void ResetBar(object sender, RoutedEventArgs e) => bar.ResetPosition(displays);
+    private void NudgeSelectedTiles(object sender, KeyEventArgs e)
+    {
+        if (!editing || selecting || Keyboard.Modifiers != ModifierKeys.None) return;
+        if (sender == this && !TileList.IsKeyboardFocusWithin && e.OriginalSource is not (Button or MainWindow)) return;
+        if (!bar.NudgeSelection(Desktop.KeyStep(e.Key))) return;
+        e.Handled = true;
+        ScheduleSave();
+    }
+
+    private void ToggleBarVisibility(object sender, RoutedEventArgs e)
+    {
+        barHidden = !barHidden;
+        UpdateMode();
+    }
 
     private void AddTile(object sender, RoutedEventArgs e) => PickRegion(null);
 
@@ -190,6 +211,11 @@ public partial class MainWindow : Window
         tile.Contrast = ContrastSlider.Value;
         tile.Saturation = SaturationSlider.Value;
         bar.Synchronize();
+        ScheduleSave();
+    }
+
+    private void ScheduleSave()
+    {
         saveTimer.Stop();
         saveTimer.Start();
     }

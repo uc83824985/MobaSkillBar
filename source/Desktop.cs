@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Runtime.InteropServices;
 using System.Windows;
+using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
@@ -41,6 +42,15 @@ internal static class Desktop
             new PixelRect(bounds.Left, bounds.Top, bounds.Right, bounds.Bottom),
             new PixelRect(work.Left, work.Top, work.Right, work.Bottom), screen.Primary);
     }).ToArray();
+
+    public static PixelPoint KeyStep(Key key) => key switch
+    {
+        Key.W or Key.Up => new(0, -1),
+        Key.A or Key.Left => new(-1, 0),
+        Key.S or Key.Down => new(0, 1),
+        Key.D or Key.Right => new(1, 0),
+        _ => default
+    };
 
     public static PixelPoint Cursor => GetCursorPos(out var point) ? point : default;
 

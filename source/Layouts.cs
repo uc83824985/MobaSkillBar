@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.IO;
 using System.Windows;
 using System.Text.Json;
@@ -10,7 +11,7 @@ internal sealed record ScreenRegion(string DisplayId, int X, int Y, int Width, i
         X <= width && Y <= height && Width <= width - X && Height <= height - Y;
 }
 
-internal sealed class Tile
+internal sealed class Tile : INotifyPropertyChanged
 {
     public const double MinimumScale = 0.25;
     public const double MaximumScale = 4;
@@ -23,6 +24,22 @@ internal sealed class Tile
     public double Opacity { get; set; } = 1;
     public double Contrast { get; set; } = 1;
     public double Saturation { get; set; } = 1;
+    private Point pixelPosition;
+    public string PositionText => $"X {pixelPosition.X:0}   Y {pixelPosition.Y:0} px";
+    public event PropertyChangedEventHandler? PropertyChanged;
+
+    public Point UpdatePixelPosition(DpiScale dpi)
+    {
+        var point = new Point(Math.Round(X * dpi.DpiScaleX, MidpointRounding.AwayFromZero),
+            Math.Round(Y * dpi.DpiScaleY, MidpointRounding.AwayFromZero));
+        if (pixelPosition != point)
+        {
+            pixelPosition = point;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(PositionText)));
+        }
+        return point;
+    }
+
     private double DisplayScale => Math.Min(Scale, GetMaximumDisplayScale(Source));
     public Size DisplaySize(DpiScale dpi) =>
         new(Source.Width * DisplayScale / dpi.DpiScaleX, Source.Height * DisplayScale / dpi.DpiScaleY);

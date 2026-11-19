@@ -72,8 +72,9 @@ internal sealed class TileView : Border
         Width = size.Width;
         Height = size.Height;
         picture.Opacity = Tile.Opacity;
-        Canvas.SetLeft(this, Tile.X);
-        Canvas.SetTop(this, Tile.Y);
+        var position = Tile.UpdatePixelPosition(dpi);
+        Canvas.SetLeft(this, position.X / dpi.DpiScaleX);
+        Canvas.SetTop(this, position.Y / dpi.DpiScaleY);
         if (Status is null && (appliedContrast != Tile.Contrast || appliedSaturation != Tile.Saturation)) RenderPixels();
     }
 
@@ -161,10 +162,15 @@ internal sealed class FloatingBar : Window
     private const double HandleSize = 9;
     private static readonly Brush EditorBackground = new SolidColorBrush(Color.FromArgb(142, 14, 23, 31));
     private static readonly Brush SelectionBrush = new SolidColorBrush(Color.FromRgb(90, 221, 251));
-    private readonly Canvas canvas = new();
+    private readonly Canvas canvas = new() { Focusable = true, FocusVisualStyle = null };
     private readonly Canvas chrome = new() { Visibility = Visibility.Hidden };
     private readonly Rectangle outline = new() { Stroke = SelectionBrush, StrokeThickness = 1.5, IsHitTestVisible = false };
     private readonly List<(Thumb Thumb, Vector Direction)> handles = [];
+    private readonly TextBlock gripText = new()
+    {
+        Foreground = Brushes.White, Margin = new Thickness(9, 0, 9, 0),
+        VerticalAlignment = VerticalAlignment.Center, FontSize = 13
+    };
     private readonly Border grip;
     private readonly Dictionary<Guid, TileView> views = [];
     private readonly Rectangle marquee = new()
@@ -204,14 +210,7 @@ internal sealed class FloatingBar : Window
         grip = new Border
         {
             Background = new SolidColorBrush(Color.FromRgb(28, 48, 61)),
-            Child = new TextBlock
-            {
-                Text = "拖动此处移动技能栏",
-                Foreground = Brushes.White,
-                Margin = new Thickness(9, 0, 9, 0),
-                VerticalAlignment = VerticalAlignment.Center,
-                FontSize = 13
-            },
+            Child = gripText,
             Cursor = Cursors.SizeAll
         };
         grip.MouseLeftButtonDown += (_, e) =>
@@ -245,6 +244,7 @@ internal sealed class FloatingBar : Window
         canvas.MouseLeftButtonDown += (_, e) =>
         {
             if (!editing || e.Source != canvas || !canvas.CaptureMouse()) return;
+            canvas.Focus();
             pointerStart = e.GetPosition(canvas);
             BeginMarquee();
             e.Handled = true;
@@ -346,7 +346,7 @@ internal sealed class FloatingBar : Window
             }).ToArray();
     }
 
-    public void ResetPosition(DisplayInfo[] displays)
+    private void ResetPosition(DisplayInfo[] displays)
     {
         if (layout is null) return;
         layout.Left = null;
@@ -358,7 +358,8 @@ internal sealed class FloatingBar : Window
 
     public void KeepVisible(DisplayInfo[] displays)
     {
-        if (IsVisible && !HasVisibleGrip(displays)) ResetPosition(displays);
+        if (!IsVisible) positionPending = true;
+        else if (!HasVisibleGrip(displays)) ResetPosition(displays);
     }
 
     private void ApplyMode()
@@ -380,14 +381,16 @@ internal sealed class FloatingBar : Window
     private void BeginTileDrag(TileView view, MouseButtonEventArgs e)
     {
         if (!editing) return;
-        if (!selected.Contains(view.Tile)) select([view.Tile]);
+        bool wasSelected = selected.Contains(view.Tile);
+        if (!wasSelected) select([view.Tile]);
+        canvas.Focus();
         if (!canvas.CaptureMouse()) return;
         pointerStart = e.GetPosition(canvas);
         pressedTile = view.Tile;
         dragMembers.Clear();
         foreach (var tile in selected)
             dragMembers.Add((views[tile.Id], new Point(tile.X, tile.Y)));
-        hold.Start();
+        if (!wasSelected) hold.Start();
         e.Handled = true;
     }
 
@@ -426,11 +429,34 @@ internal sealed class FloatingBar : Window
             Math.Abs(delta.Y) < SystemParameters.MinimumVerticalDragDistance) return;
         hold.Stop();
         moving = true;
-        // Clamp the translation once so members retain their spacing at the canvas edges.
-        delta.X = Math.Max(delta.X, -dragMembers.Min(member => member.Origin.X));
-        delta.Y = Math.Max(delta.Y, -dragMembers.Min(member => member.Origin.Y));
+        MoveTiles(dragMembers, delta, VisualTreeHelper.GetDpi(this));
+    }
+
+    public bool NudgeSelection(PixelPoint step)
+    {
+        if (step == default || !editing || !IsVisible || selected.Count == 0 ||
+            canvas.IsMouseCaptured || resizing is not null) return false;
+
         var dpi = VisualTreeHelper.GetDpi(this);
-        foreach (var (member, origin) in dragMembers)
+        var delta = new Vector(step.X / dpi.DpiScaleX, step.Y / dpi.DpiScaleY);
+        // Start each step at the displayed pixel so fractional drag positions cannot skip a pixel.
+        var members = selected.Select(tile =>
+        {
+            var view = views[tile.Id];
+            var origin = new Point(step.X == 0 ? tile.X : Canvas.GetLeft(view),
+                step.Y == 0 ? tile.Y : Canvas.GetTop(view));
+            return (view, origin);
+        }).ToArray();
+        MoveTiles(members, delta, dpi);
+        return true;
+    }
+
+    private void MoveTiles(IReadOnlyList<(TileView View, Point Origin)> members, Vector delta, DpiScale dpi)
+    {
+        // Clamp the translation once so members retain their spacing at the canvas edges.
+        delta.X = Math.Max(delta.X, -members.Min(member => member.Origin.X));
+        delta.Y = Math.Max(delta.Y, -members.Min(member => member.Origin.Y));
+        foreach (var (member, origin) in members)
         {
             member.Tile.X = origin.X + delta.X;
             member.Tile.Y = origin.Y + delta.Y;
@@ -482,6 +508,7 @@ internal sealed class FloatingBar : Window
             member.ShowGroupOutline(editing && selected.Count > 1 && selected.Contains(member.Tile), SelectionBrush);
 
         var tile = selected.Count == 1 ? selected.First() : null;
+        gripText.Text = tile is null ? "拖动此处移动技能栏" : $"拖动此处移动技能栏    {tile.PositionText}";
         if (!editing || tile is null || !views.TryGetValue(tile.Id, out var view))
         {
             chrome.Visibility = Visibility.Hidden;
@@ -494,12 +521,14 @@ internal sealed class FloatingBar : Window
         double height = Math.Max(view.Height, 2 * HandleSize);
         outline.Width = width;
         outline.Height = height;
-        Canvas.SetLeft(outline, tile.X);
-        Canvas.SetTop(outline, tile.Y);
+        double left = Canvas.GetLeft(view);
+        double top = Canvas.GetTop(view);
+        Canvas.SetLeft(outline, left);
+        Canvas.SetTop(outline, top);
         foreach (var (thumb, direction) in handles)
         {
-            Canvas.SetLeft(thumb, Math.Max(0, tile.X + width * (direction.X + 1) / 2 - HandleSize / 2));
-            Canvas.SetTop(thumb, Math.Max(0, tile.Y + height * (direction.Y + 1) / 2 - HandleSize / 2));
+            Canvas.SetLeft(thumb, Math.Max(0, left + width * (direction.X + 1) / 2 - HandleSize / 2));
+            Canvas.SetTop(thumb, Math.Max(0, top + height * (direction.Y + 1) / 2 - HandleSize / 2));
         }
     }
 

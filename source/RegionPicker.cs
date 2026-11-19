@@ -157,14 +157,7 @@ internal sealed class RegionPicker : Window
                 return;
             }
 
-            var (dx, dy) = e.Key switch
-            {
-                Key.W or Key.Up => (0, -1),
-                Key.A or Key.Left => (-1, 0),
-                Key.S or Key.Down => (0, 1),
-                Key.D or Key.Right => (1, 0),
-                _ => (0, 0)
-            };
+            var (dx, dy) = Desktop.KeyStep(e.Key);
             if (dx == 0 && dy == 0) return;
 
             e.Handled = true;
