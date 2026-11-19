@@ -1,6 +1,10 @@
+using System.ComponentModel;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Interop;
+using System.Windows.Media;
+using System.Windows.Media.Imaging;
+using Drawing = System.Drawing;
 using Screen = System.Windows.Forms.Screen;
 
 namespace MobaSkillBar;
@@ -39,6 +43,58 @@ internal static class Desktop
     }).ToArray();
 
     public static PixelPoint Cursor => GetCursorPos(out var point) ? point : default;
+
+    public static void MoveCursor(PixelPoint point) => SetCursorPos(point.X, point.Y);
+
+    public static BitmapSource? Snapshot(PixelRect bounds)
+    {
+        try
+        {
+            using var pixels = new Drawing.Bitmap(bounds.Width, bounds.Height, Drawing.Imaging.PixelFormat.Format32bppRgb);
+            CopyDesktopPixels(pixels, bounds);
+
+            var area = new Drawing.Rectangle(0, 0, pixels.Width, pixels.Height);
+            var data = pixels.LockBits(area, Drawing.Imaging.ImageLockMode.ReadOnly, pixels.PixelFormat);
+            try
+            {
+                var snapshot = BitmapSource.Create(pixels.Width, pixels.Height, 96, 96, PixelFormats.Bgr32,
+                    null, data.Scan0, checked(data.Stride * pixels.Height), data.Stride);
+                snapshot.Freeze();
+                return snapshot;
+            }
+            finally
+            {
+                pixels.UnlockBits(data);
+            }
+        }
+        catch (ExternalException error)
+        {
+            System.Diagnostics.Trace.WriteLine(error);
+            return null;
+        }
+    }
+
+    private static void CopyDesktopPixels(Drawing.Bitmap pixels, PixelRect bounds)
+    {
+        const uint sourceCopy = 0x00CC0020;
+        const uint captureLayered = 0x40000000;
+        using var graphics = Drawing.Graphics.FromImage(pixels);
+        IntPtr destination = graphics.GetHdc();
+        IntPtr screen = GetDC(IntPtr.Zero);
+        try
+        {
+            if (screen == IntPtr.Zero || !BitBlt(destination, 0, 0, bounds.Width, bounds.Height,
+                screen, bounds.Left, bounds.Top, sourceCopy | captureLayered))
+            {
+                throw new Win32Exception(Marshal.GetLastWin32Error());
+            }
+        }
+        finally
+        {
+            if (screen != IntPtr.Zero) ReleaseDC(IntPtr.Zero, screen);
+            graphics.ReleaseHdc(destination);
+        }
+    }
 
     public static PixelRect WindowBounds(Window window) =>
         GetWindowRect(new WindowInteropHelper(window).Handle, out var bounds) ? bounds : default;
@@ -82,6 +138,19 @@ internal static class Desktop
 
     [DllImport("user32")]
     private static extern bool GetCursorPos(out PixelPoint point);
+
+    [DllImport("user32")]
+    private static extern bool SetCursorPos(int x, int y);
+
+    [DllImport("user32", SetLastError = true)]
+    private static extern IntPtr GetDC(IntPtr window);
+
+    [DllImport("user32")]
+    private static extern int ReleaseDC(IntPtr window, IntPtr dc);
+
+    [DllImport("gdi32", SetLastError = true)]
+    private static extern bool BitBlt(IntPtr destination, int x, int y, int width, int height,
+        IntPtr source, int sourceX, int sourceY, uint operation);
 
     [DllImport("user32")]
     private static extern bool GetWindowRect(IntPtr window, out PixelRect rect);

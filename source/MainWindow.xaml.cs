@@ -24,7 +24,7 @@ public partial class MainWindow : Window
     private long nextPresentation;
     private long lastPreviewActivity;
     private LayoutPreset Current => layouts.Active;
-    private Tile? Selected => TileList.SelectedItem as Tile;
+    private Tile? Selected => TileList.SelectedItems.Count == 1 ? TileList.SelectedItem as Tile : null;
 
     public MainWindow()
     {
@@ -104,7 +104,7 @@ public partial class MainWindow : Window
     private void UpdateMode()
     {
         ModeButton.Content = editing ? "完成编辑" : "编辑悬浮栏";
-        ModeHint.Text = editing ? "点击选中技能格，拖动格子移动，拖动边框控制点缩放。" : "显示模式 · 鼠标可穿透悬浮栏。";
+        ModeHint.Text = editing ? "拖动空白处或长按技能格后拖动可框选，拖动选中格可一起移动。单选时拖动控制点缩放。" : "显示模式 · 鼠标可穿透悬浮栏。";
         if (!IsLoaded) return;
         bar.SetMode(editing, selecting, displays);
         SetPreviewActive(!selecting && bar.Views.Count > 0);
@@ -158,12 +158,13 @@ public partial class MainWindow : Window
         if (Current.Tiles.Count > 0)
         {
             var last = Current.Tiles[^1];
-            tile.X = last.X + last.Width + 6;
+            var dpi = VisualTreeHelper.GetDpi(bar);
+            tile.X = last.X + last.DisplaySize(dpi).Width + 6;
             tile.Y = last.Y;
-            if (tile.X + tile.Width > 460)
+            if (tile.X + tile.DisplaySize(dpi).Width > 460)
             {
                 tile.X = 0;
-                tile.Y = Current.Tiles.Max(item => item.Y + item.Height) + 6;
+                tile.Y = Current.Tiles.Max(item => item.Y + item.DisplaySize(dpi).Height) + 6;
             }
         }
         Current.Tiles.Add(tile);
@@ -187,10 +188,45 @@ public partial class MainWindow : Window
         tile.Scale = ScaleSlider.Value;
         tile.Opacity = 1 - OpacitySlider.Value;
         tile.Contrast = ContrastSlider.Value;
+        tile.Saturation = SaturationSlider.Value;
         bar.Synchronize();
         saveTimer.Stop();
         saveTimer.Start();
     }
+
+    private void ResetSetting(object sender, RoutedEventArgs e)
+    {
+        if (((Button)sender).Tag is Slider slider)
+            slider.Value = slider == OpacitySlider ? 0 : 1;
+    }
+
+    private void SelectPercentage(object sender, MouseButtonEventArgs e)
+    {
+        var field = (TextBox)sender;
+        field.Focus();
+        field.SelectAll();
+        e.Handled = true;
+    }
+
+    private static void FinishPercentage(TextBox field, bool commit)
+    {
+        var binding = field.GetBindingExpression(TextBox.TextProperty);
+        if (binding is null) return;
+        if (commit && binding.IsDirty) binding.UpdateSource();
+        binding.UpdateTarget();
+    }
+
+    private void PercentageKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key is not (Key.Enter or Key.Escape)) return;
+        var field = (TextBox)sender;
+        FinishPercentage(field, commit: e.Key == Key.Enter);
+        field.SelectAll();
+        e.Handled = true;
+    }
+
+    private void CommitPercentage(object sender, KeyboardFocusChangedEventArgs e) =>
+        FinishPercentage((TextBox)sender, commit: true);
 
     private void LowerTile(object sender, RoutedEventArgs e) => MoveLayer(-1);
     private void RaiseTile(object sender, RoutedEventArgs e) => MoveLayer(1);
@@ -213,10 +249,13 @@ public partial class MainWindow : Window
         if (!refreshingControls) RefreshSelection();
     }
 
-    private void SelectFromBar(Tile? tile)
+    private void SelectFromBar(IReadOnlyCollection<Tile> tiles)
     {
-        if (Selected == tile) RefreshSelection();
-        else TileList.SelectedItem = tile;
+        refreshingControls = true;
+        TileList.UnselectAll();
+        foreach (var tile in tiles) TileList.SelectedItems.Add(tile);
+        refreshingControls = false;
+        RefreshSelection();
     }
 
     private void RefreshTileList(Tile? tile)
@@ -231,14 +270,15 @@ public partial class MainWindow : Window
     private void RefreshSelection()
     {
         var tile = Selected;
-        bar.SelectTile(tile);
+        bar.SelectTiles(TileList.SelectedItems.Cast<Tile>());
         Appearance.Visibility = tile is null ? Visibility.Collapsed : Visibility.Visible;
-        ReplaceButton.IsEnabled = RemoveButton.IsEnabled = tile is not null;
+        RenameTileButton.IsEnabled = ReplaceButton.IsEnabled = RemoveButton.IsEnabled = tile is not null;
         if (tile is null) return;
         refreshingControls = true;
         ScaleSlider.Value = tile.Scale;
         OpacitySlider.Value = 1 - tile.Opacity;
         ContrastSlider.Value = tile.Contrast;
+        SaturationSlider.Value = tile.Saturation;
         int index = Current.Tiles.IndexOf(tile);
         LowerButton.IsEnabled = index > 0;
         RaiseButton.IsEnabled = index < Current.Tiles.Count - 1;
@@ -257,7 +297,7 @@ public partial class MainWindow : Window
 
     private void CreateLayout(object sender, RoutedEventArgs e)
     {
-        if (AskLayoutName("新建布局", "", except: null) is not { } name) return;
+        if (AskName("新建布局", "布局名称", "", layouts.Presets.Select(preset => preset.Name)) is not { } name) return;
         var preset = new LayoutPreset { Name = name };
         layouts.Presets.Add(preset);
         layouts.ActiveId = preset.Id;
@@ -268,7 +308,8 @@ public partial class MainWindow : Window
 
     private void RenameLayout(object sender, RoutedEventArgs e)
     {
-        if (AskLayoutName("重命名布局", Current.Name, Current) is not { } name) return;
+        if (AskName("重命名布局", "布局名称", Current.Name,
+            layouts.Presets.Where(preset => preset != Current).Select(preset => preset.Name)) is not { } name) return;
         Current.Name = name;
         RefreshPresetSelector();
         Save();
@@ -311,10 +352,18 @@ public partial class MainWindow : Window
         refreshingControls = false;
     }
 
-    private string? AskLayoutName(string title, string initial, LayoutPreset? except)
+    private void RenameTile(object sender, RoutedEventArgs e)
+    {
+        if (Selected is not { } tile || AskName("重命名技能格", "技能格名称", tile.Name) is not { } name) return;
+        tile.Name = name;
+        RefreshTileList(tile);
+        Save();
+    }
+
+    private string? AskName(string title, string field, string initial, IEnumerable<string>? takenNames = null)
     {
         var input = new TextBox { Text = initial, MinWidth = 240, MaxLength = 60, Margin = new Thickness(0, 5, 0, 10) };
-        var label = new Label { Content = "布局名称", Target = input, Padding = new Thickness(0) };
+        var label = new Label { Content = field, Target = input, Padding = new Thickness(0) };
         var confirm = new Button { Content = "保存", MinWidth = 68, IsDefault = true };
         var cancel = new Button { Content = "取消", MinWidth = 68, IsCancel = true };
         var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
@@ -332,10 +381,9 @@ public partial class MainWindow : Window
         confirm.Click += (_, _) =>
         {
             string name = input.Text.Trim();
-            if (name.Length == 0 || layouts.Presets.Any(preset => preset != except &&
-                string.Equals(preset.Name, name, StringComparison.OrdinalIgnoreCase)))
+            if (name.Length == 0 || takenNames?.Contains(name, StringComparer.OrdinalIgnoreCase) == true)
             {
-                MessageBox.Show(dialog, "请输入未被使用的布局名称。", title, MessageBoxButton.OK, MessageBoxImage.Information);
+                MessageBox.Show(dialog, name.Length == 0 ? $"请输入{field}。" : $"该{field}已被使用。", title, MessageBoxButton.OK, MessageBoxImage.Information);
                 input.Focus();
                 return;
             }

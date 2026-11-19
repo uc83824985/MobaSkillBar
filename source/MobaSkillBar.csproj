@@ -9,6 +9,8 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
   </PropertyGroup>
   <ItemGroup>
+    <Content Include="../config/layouts.json" Condition="Exists('../config/layouts.json')" Link="config/layouts.json"
+             CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Using Remove="System.Drawing" />
     <Using Remove="System.Windows.Forms" />
     <PackageReference Include="Vortice.Direct3D11" Version="3.8.3" />

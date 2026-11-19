@@ -4,15 +4,19 @@
 TBD - created by archiving change add-screen-region-overlay. Update Purpose after archive.
 ## Requirements
 ### Requirement: Live screen region selection
-The application SHALL let users select or replace the source rectangle of a tile within one display. Selection SHALL use physical screen pixels and cancellation SHALL preserve existing configuration.
+The application SHALL let users select or replace the source rectangle of a tile within one display. Selection SHALL use physical screen pixels and cancellation SHALL preserve existing configuration. During selection the application SHALL magnify pixels around the cursor, show the selection border in that view, and support single-pixel cursor movement using WASD or the arrow keys.
 
 #### Scenario: Select two skill slots
 - **WHEN** the user selects two bottom HUD rectangles as separate tiles
 - **THEN** each tile SHALL refresh from its own rectangle, including when the rectangles are on different displays
 
 #### Scenario: Cancel replacing a source
-- **WHEN** the user presses Escape during source selection
+- **WHEN** the user presses Escape or right-clicks during source selection
 - **THEN** the application SHALL retain the previous source rectangle
+
+#### Scenario: Align a selection to a pixel edge
+- **WHEN** the user presses W, A, S, D, or the corresponding arrow key before or during a drag
+- **THEN** the cursor SHALL move one physical pixel up, left, down, or right within the display, and the magnifier and selection SHALL follow the cursor
 
 ### Requirement: Capture interruption and feedback
 The application SHALL preserve configured regions during capture interruptions and SHALL prevent recursive overlay imagery.

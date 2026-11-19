@@ -1,0 +1,81 @@
+{
+  "ActiveId": "00000000-0000-0000-0000-000000000000",
+  "Presets": [
+    {
+      "Id": "56ada7a4-4a9a-4918-8ab4-e43ea6534c2e",
+      "Name": "\u9ED8\u8BA4\u5E03\u5C40",
+      "Left": 1187,
+      "Top": 594,
+      "Tiles": [
+        {
+          "Id": "437f1044-1574-4b8d-b6e6-9d046860405b",
+          "Name": "\u6280\u80FD\u683C 1",
+          "Source": {
+            "DisplayId": "\\\\?\\DISPLAY#SKG2702#5\u00262a2697f8\u00260\u0026UID28929#{e6f07b5f-ee97-4a90-b076-33f57bf4eaa7}",
+            "X": 881,
+            "Y": 1295,
+            "Width": 62,
+            "Height": 61
+          },
+          "X": 85,
+          "Y": 30,
+          "Scale": 1,
+          "Opacity": 1,
+          "Contrast": 1,
+          "Saturation": 1
+        },
+        {
+          "Id": "ada4a43e-f573-43af-9574-8a147f62d4b6",
+          "Name": "\u6280\u80FD\u683C 2",
+          "Source": {
+            "DisplayId": "\\\\?\\DISPLAY#SKG2702#5\u00262a2697f8\u00260\u0026UID28929#{e6f07b5f-ee97-4a90-b076-33f57bf4eaa7}",
+            "X": 1039,
+            "Y": 1295,
+            "Width": 61,
+            "Height": 61
+          },
+          "X": 153,
+          "Y": 30,
+          "Scale": 1,
+          "Opacity": 1,
+          "Contrast": 1,
+          "Saturation": 1
+        },
+        {
+          "Id": "916390a1-9328-4b83-9be9-f1d50ff06b1f",
+          "Name": "\u6280\u80FD\u683C 3",
+          "Source": {
+            "DisplayId": "\\\\?\\DISPLAY#SKG2702#5\u00262a2697f8\u00260\u0026UID28929#{e6f07b5f-ee97-4a90-b076-33f57bf4eaa7}",
+            "X": 1256,
+            "Y": 1291,
+            "Width": 52,
+            "Height": 52
+          },
+          "X": 228,
+          "Y": 8,
+          "Scale": 1,
+          "Opacity": 1,
+          "Contrast": 1,
+          "Saturation": 1
+        },
+        {
+          "Id": "387fd045-fec2-4980-84da-b583ebe0f34f",
+          "Name": "\u6280\u80FD\u683C 4",
+          "Source": {
+            "DisplayId": "\\\\?\\DISPLAY#SKG2702#5\u00262a2697f8\u00260\u0026UID28929#{e6f07b5f-ee97-4a90-b076-33f57bf4eaa7}",
+            "X": 1317,
+            "Y": 1291,
+            "Width": 52,
+            "Height": 52
+          },
+          "X": 229,
+          "Y": 60,
+          "Scale": 1,
+          "Opacity": 1,
+          "Contrast": 1,
+          "Saturation": 1
+        }
+      ]
+    }
+  ]
+}

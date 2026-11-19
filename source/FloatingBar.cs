@@ -6,6 +6,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Shapes;
+using System.Windows.Threading;
 
 namespace MobaSkillBar;
 
@@ -22,11 +23,16 @@ internal sealed class TileView : Border
         FontSize = 13,
         IsHitTestVisible = false
     };
+    private readonly Rectangle groupOutline = new()
+    {
+        StrokeThickness = 2, Visibility = Visibility.Hidden, IsHitTestVisible = false
+    };
     private WriteableBitmap? bitmap;
     private byte[] pixels = [];
     private byte[] adjusted = [];
     private readonly byte[] contrastMap = new byte[256];
     private double appliedContrast = double.NaN;
+    private double appliedSaturation = double.NaN;
     public Tile Tile { get; }
     public string? Status { get; private set; }
 
@@ -34,13 +40,20 @@ internal sealed class TileView : Border
     {
         Tile = tile;
         ClipToBounds = true;
+        RenderOptions.SetBitmapScalingMode(picture, BitmapScalingMode.NearestNeighbor);
         var grid = new Grid();
         grid.Children.Add(picture);
         grid.Children.Add(status);
+        grid.Children.Add(groupOutline);
         Child = grid;
         Background = Brushes.Transparent;
         SetStatus("正在捕获");
-        UpdateAppearance();
+    }
+
+    public void ShowGroupOutline(bool visible, Brush brush)
+    {
+        groupOutline.Stroke = brush;
+        groupOutline.Visibility = visible ? Visibility.Visible : Visibility.Hidden;
     }
 
     public void SetStatus(string message)
@@ -53,14 +66,15 @@ internal sealed class TileView : Border
         Background = new SolidColorBrush(Color.FromArgb(205, 18, 28, 37));
     }
 
-    public void UpdateAppearance()
+    public void UpdateAppearance(DpiScale dpi)
     {
-        Width = Tile.Width;
-        Height = Tile.Height;
+        var size = Tile.DisplaySize(dpi);
+        Width = size.Width;
+        Height = size.Height;
         picture.Opacity = Tile.Opacity;
         Canvas.SetLeft(this, Tile.X);
         Canvas.SetTop(this, Tile.Y);
-        if (Status is null && appliedContrast != Tile.Contrast) RenderPixels();
+        if (Status is null && (appliedContrast != Tile.Contrast || appliedSaturation != Tile.Saturation)) RenderPixels();
     }
 
     public void UpdatePixels(IntPtr data, int rowPitch)
@@ -85,10 +99,10 @@ internal sealed class TileView : Border
                 Marshal.Copy(data + row * rowPitch, pixels, row * stride, stride);
         }
         RenderPixels();
+        if (picture.Source != bitmap) picture.Source = bitmap;
         if (Status is not null)
         {
             Status = null;
-            picture.Source = bitmap;
             status.Visibility = Visibility.Collapsed;
             Background = Brushes.Transparent;
         }
@@ -99,25 +113,46 @@ internal sealed class TileView : Border
         if (bitmap is null) return;
         double contrast = Tile.Contrast;
         byte[] output = pixels;
-        if (contrast != 1)
+        double saturation = Tile.Saturation;
+        if (appliedContrast != contrast)
+        {
+            for (int value = 0; value < contrastMap.Length; value++)
+                contrastMap[value] = (byte)Math.Clamp(Math.Round(128 + (value - 128) * contrast), 0, 255);
+        }
+        if (contrast != 1 || saturation != 1)
         {
             if (adjusted.Length != pixels.Length) adjusted = new byte[pixels.Length];
-            if (appliedContrast != contrast)
+            if (saturation == 1)
             {
-                for (int value = 0; value < contrastMap.Length; value++)
-                    contrastMap[value] = (byte)Math.Clamp(Math.Round(128 + (value - 128) * contrast), 0, 255);
+                for (int i = 0; i < pixels.Length; i += 4)
+                {
+                    adjusted[i] = contrastMap[pixels[i]];
+                    adjusted[i + 1] = contrastMap[pixels[i + 1]];
+                    adjusted[i + 2] = contrastMap[pixels[i + 2]];
+                }
             }
-            for (int i = 0; i < pixels.Length; i += 4)
+            else
             {
-                adjusted[i] = contrastMap[pixels[i]];
-                adjusted[i + 1] = contrastMap[pixels[i + 1]];
-                adjusted[i + 2] = contrastMap[pixels[i + 2]];
+                int amount = (int)Math.Round(saturation * 65536);
+                for (int i = 0; i < pixels.Length; i += 4)
+                {
+                    int b = pixels[i], g = pixels[i + 1], r = pixels[i + 2];
+                    // Rec. 709 luma, using fixed-point weights that sum to one.
+                    int gray = (4732 * b + 46871 * g + 13933 * r + 32768) >> 16;
+                    adjusted[i] = AdjustChannel(b, gray, amount);
+                    adjusted[i + 1] = AdjustChannel(g, gray, amount);
+                    adjusted[i + 2] = AdjustChannel(r, gray, amount);
+                }
             }
             output = adjusted;
         }
         appliedContrast = contrast;
+        appliedSaturation = saturation;
         bitmap.WritePixels(new Int32Rect(0, 0, bitmap.PixelWidth, bitmap.PixelHeight), output, bitmap.PixelWidth * 4, 0);
     }
+
+    private byte AdjustChannel(int channel, int gray, int amount) =>
+        contrastMap[Math.Clamp(gray + (((channel - gray) * amount + 32768) >> 16), 0, 255)];
 }
 
 internal sealed class FloatingBar : Window
@@ -132,24 +167,34 @@ internal sealed class FloatingBar : Window
     private readonly List<(Thumb Thumb, Vector Direction)> handles = [];
     private readonly Border grip;
     private readonly Dictionary<Guid, TileView> views = [];
-    private readonly Action<Tile?> select;
+    private readonly Rectangle marquee = new()
+    {
+        Stroke = SelectionBrush, StrokeThickness = 1, Fill = new SolidColorBrush(Color.FromArgb(48, 90, 221, 251)),
+        Visibility = Visibility.Hidden, IsHitTestVisible = false
+    };
+    private readonly DispatcherTimer hold = new() { Interval = TimeSpan.FromMilliseconds(400) };
+    private readonly HashSet<Tile> selected = [];
+    private readonly Action<IReadOnlyCollection<Tile>> select;
     private readonly Action save;
     private LayoutPreset? layout;
-    private Tile? selected;
-    private TileView? dragging;
-    private Point dragOrigin;
+    private readonly List<(TileView View, Point Origin)> dragMembers = [];
+    private Tile? pressedTile;
+    private Point pointerStart;
+    private bool moving;
     private ResizeGesture? resizing;
     private bool editing;
     private bool excluded;
     private bool positionPending;
 
-    public FloatingBar(Action<Tile?> select, Action save)
+    public FloatingBar(Action<IReadOnlyCollection<Tile>> select, Action save)
     {
         this.select = select;
         this.save = save;
         WindowStyle = WindowStyle.None;
         ResizeMode = ResizeMode.NoResize;
         AllowsTransparency = true;
+        UseLayoutRounding = true;
+        SnapsToDevicePixels = true;
         Background = Brushes.Transparent;
         ShowInTaskbar = false;
         ShowActivated = false;
@@ -188,29 +233,47 @@ internal sealed class FloatingBar : Window
         chrome.Children.Add(outline);
         CreateResizeHandles();
         UpdateSize();
+        Loaded += (_, _) => Synchronize();
+        DpiChanged += (_, _) => Dispatcher.InvokeAsync(Synchronize);
         SourceInitialized += (_, _) => ApplyMode();
+        Panel.SetZIndex(marquee, int.MaxValue);
+        hold.Tick += (_, _) =>
+        {
+            hold.Stop();
+            if (canvas.IsMouseCaptured) BeginMarquee();
+        };
         canvas.MouseLeftButtonDown += (_, e) =>
         {
-            if (editing && e.Source == canvas) select(null);
+            if (!editing || e.Source != canvas || !canvas.CaptureMouse()) return;
+            pointerStart = e.GetPosition(canvas);
+            BeginMarquee();
+            e.Handled = true;
         };
-        canvas.MouseMove += MoveTile;
-        canvas.MouseLeftButtonUp += (_, _) => { if (dragging is not null) canvas.ReleaseMouseCapture(); };
-        canvas.LostMouseCapture += (_, _) =>
+        canvas.MouseMove += (_, e) =>
         {
-            if (dragging is null) return;
-            dragging = null;
-            save();
+            if (canvas.IsMouseCaptured && e.LeftButton == MouseButtonState.Pressed) UpdateGesture(e.GetPosition(canvas));
         };
+        canvas.MouseLeftButtonUp += (_, e) =>
+        {
+            if (!canvas.IsMouseCaptured) return;
+            UpdateGesture(e.GetPosition(canvas));
+            if (pressedTile is { } tile && !moving && selected.Count > 1) select([tile]);
+            canvas.ReleaseMouseCapture();
+            e.Handled = true;
+        };
+        canvas.LostMouseCapture += (_, _) => EndGesture();
     }
 
     public IReadOnlyCollection<TileView> Views => views.Values;
 
     public void Load(LayoutPreset preset)
     {
+        if (canvas.IsMouseCaptured) canvas.ReleaseMouseCapture();
         layout = preset;
-        selected = null;
+        selected.Clear();
         positionPending = true;
         canvas.Children.Clear();
+        canvas.Children.Add(marquee);
         views.Clear();
         Synchronize();
     }
@@ -237,20 +300,22 @@ internal sealed class FloatingBar : Window
                 view.MouseLeftButtonDown += (_, e) => BeginTileDrag(view, e);
             }
             Panel.SetZIndex(view, index);
-            view.UpdateAppearance();
+            view.UpdateAppearance(VisualTreeHelper.GetDpi(this));
         }
         UpdateSize();
         UpdateSelection();
     }
 
-    public void SelectTile(Tile? tile)
+    public void SelectTiles(IEnumerable<Tile> tiles)
     {
-        selected = tile;
+        selected.Clear();
+        selected.UnionWith(tiles);
         UpdateSelection();
     }
 
     public void SetMode(bool edit, bool suspended, DisplayInfo[] displays)
     {
+        if ((!edit || suspended) && canvas.IsMouseCaptured) canvas.ReleaseMouseCapture();
         editing = edit;
         if (suspended || (!editing && views.Count == 0))
         {
@@ -306,8 +371,8 @@ internal sealed class FloatingBar : Window
 
     private void UpdateSize()
     {
-        double width = layout?.Tiles.Select(tile => tile.X + tile.Width).DefaultIfEmpty().Max() ?? 0;
-        double height = layout?.Tiles.Select(tile => tile.Y + tile.Height).DefaultIfEmpty().Max() ?? 0;
+        double width = views.Values.Select(view => view.Tile.X + view.Width).DefaultIfEmpty().Max();
+        double height = views.Values.Select(view => view.Tile.Y + view.Height).DefaultIfEmpty().Max();
         Width = Math.Max(300, width + HandleSize);
         Height = GripHeight + Math.Max(130, height + HandleSize);
     }
@@ -315,21 +380,74 @@ internal sealed class FloatingBar : Window
     private void BeginTileDrag(TileView view, MouseButtonEventArgs e)
     {
         if (!editing) return;
-        select(view.Tile);
-        dragOrigin = e.GetPosition(view);
-        if (canvas.CaptureMouse()) dragging = view;
+        if (!selected.Contains(view.Tile)) select([view.Tile]);
+        if (!canvas.CaptureMouse()) return;
+        pointerStart = e.GetPosition(canvas);
+        pressedTile = view.Tile;
+        dragMembers.Clear();
+        foreach (var tile in selected)
+            dragMembers.Add((views[tile.Id], new Point(tile.X, tile.Y)));
+        hold.Start();
         e.Handled = true;
     }
 
-    private void MoveTile(object sender, MouseEventArgs e)
+    private void BeginMarquee()
     {
-        if (dragging is not { } view || e.LeftButton != MouseButtonState.Pressed) return;
-        var point = e.GetPosition(canvas);
-        view.Tile.X = Math.Max(0, point.X - dragOrigin.X);
-        view.Tile.Y = Math.Max(0, point.Y - dragOrigin.Y);
-        view.UpdateAppearance();
+        pressedTile = null;
+        dragMembers.Clear();
+        marquee.Visibility = Visibility.Visible;
+        UpdateMarquee(pointerStart);
+    }
+
+    private void UpdateMarquee(Point point)
+    {
+        var area = new Rect(pointerStart, point);
+        Canvas.SetLeft(marquee, area.Left);
+        Canvas.SetTop(marquee, area.Top);
+        marquee.Width = area.Width;
+        marquee.Height = area.Height;
+
+        var hits = views.Values.Where(view => area.Width > 0 && area.Height > 0 &&
+            area.IntersectsWith(new Rect(view.Tile.X, view.Tile.Y, view.Width, view.Height)))
+            .Select(view => view.Tile).ToArray();
+        if (!selected.SetEquals(hits)) select(hits);
+    }
+
+    private void UpdateGesture(Point point)
+    {
+        if (marquee.Visibility == Visibility.Visible)
+        {
+            UpdateMarquee(point);
+            return;
+        }
+        if (dragMembers.Count == 0) return;
+        var delta = point - pointerStart;
+        if (!moving && Math.Abs(delta.X) < SystemParameters.MinimumHorizontalDragDistance &&
+            Math.Abs(delta.Y) < SystemParameters.MinimumVerticalDragDistance) return;
+        hold.Stop();
+        moving = true;
+        // Clamp the translation once so members retain their spacing at the canvas edges.
+        delta.X = Math.Max(delta.X, -dragMembers.Min(member => member.Origin.X));
+        delta.Y = Math.Max(delta.Y, -dragMembers.Min(member => member.Origin.Y));
+        var dpi = VisualTreeHelper.GetDpi(this);
+        foreach (var (member, origin) in dragMembers)
+        {
+            member.Tile.X = origin.X + delta.X;
+            member.Tile.Y = origin.Y + delta.Y;
+            member.UpdateAppearance(dpi);
+        }
         UpdateSize();
         UpdateSelection();
+    }
+
+    private void EndGesture()
+    {
+        hold.Stop();
+        marquee.Visibility = Visibility.Hidden;
+        pressedTile = null;
+        dragMembers.Clear();
+        if (moving) save();
+        moving = false;
     }
 
     private void CreateResizeHandles()
@@ -360,7 +478,11 @@ internal sealed class FloatingBar : Window
 
     private void UpdateSelection()
     {
-        if (!editing || selected is not { } tile || !views.ContainsKey(tile.Id))
+        foreach (var member in views.Values)
+            member.ShowGroupOutline(editing && selected.Count > 1 && selected.Contains(member.Tile), SelectionBrush);
+
+        var tile = selected.Count == 1 ? selected.First() : null;
+        if (!editing || tile is null || !views.TryGetValue(tile.Id, out var view))
         {
             chrome.Visibility = Visibility.Hidden;
             return;
@@ -368,8 +490,8 @@ internal sealed class FloatingBar : Window
 
         chrome.Visibility = Visibility.Visible;
         // Leave enough room to distinguish the handles even for tiny captures.
-        double width = Math.Max(tile.Width, 2 * HandleSize);
-        double height = Math.Max(tile.Height, 2 * HandleSize);
+        double width = Math.Max(view.Width, 2 * HandleSize);
+        double height = Math.Max(view.Height, 2 * HandleSize);
         outline.Width = width;
         outline.Height = height;
         Canvas.SetLeft(outline, tile.X);
@@ -383,10 +505,10 @@ internal sealed class FloatingBar : Window
 
     private void BeginResize(Vector direction)
     {
-        if (editing && selected is { } tile && views.TryGetValue(tile.Id, out var view))
+        if (editing && selected.Count == 1 && views.TryGetValue(selected.First().Id, out var view))
         {
             resizing = new ResizeGesture(view, direction, Mouse.GetPosition(canvas),
-                new Rect(tile.X, tile.Y, tile.Width, tile.Height));
+                new Rect(view.Tile.X, view.Tile.Y, view.Width, view.Height));
         }
     }
 
@@ -395,12 +517,12 @@ internal sealed class FloatingBar : Window
         if (resizing is not { } gesture) return;
         var view = gesture.View;
         var tile = view.Tile;
-        var (position, scale) = TileGeometry.Resize(tile.Source, gesture.InitialBounds, gesture.Direction,
+        var (position, scale) = TileGeometry.Resize(tile.Source, gesture.InitialBounds, VisualTreeHelper.GetDpi(this), gesture.Direction,
             Mouse.GetPosition(canvas) - gesture.Start);
         tile.X = position.X;
         tile.Y = position.Y;
         tile.Scale = scale;
-        view.UpdateAppearance();
+        view.UpdateAppearance(VisualTreeHelper.GetDpi(this));
         UpdateSize();
         UpdateSelection();
     }
@@ -409,7 +531,7 @@ internal sealed class FloatingBar : Window
     {
         if (resizing is not { } gesture) return;
         resizing = null;
-        select(gesture.View.Tile);
+        select([gesture.View.Tile]);
         save();
     }
 
