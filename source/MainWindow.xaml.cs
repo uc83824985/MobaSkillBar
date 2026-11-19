@@ -1,0 +1,366 @@
+using System.IO;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Input;
+using System.Windows.Media;
+using System.Windows.Threading;
+
+namespace MobaSkillBar;
+
+public partial class MainWindow : Window
+{
+    private const long PreviewInterval = TimeSpan.TicksPerSecond / 60;
+    private readonly LayoutStore store = new();
+    private readonly LayoutCollection layouts;
+    private readonly FloatingBar bar;
+    private readonly ScreenCapture capture = new();
+    private readonly DispatcherTimer displayRefresh;
+    private readonly DispatcherTimer saveTimer;
+    private DisplayInfo[] displays = [];
+    private bool editing;
+    private bool selecting;
+    private bool refreshingControls = true;
+    private bool previewActive;
+    private long nextPresentation;
+    private long lastPreviewActivity;
+    private LayoutPreset Current => layouts.Active;
+    private Tile? Selected => TileList.SelectedItem as Tile;
+
+    public MainWindow()
+    {
+        InitializeComponent();
+        layouts = store.Load(out var warning);
+        editing = Current.Tiles.Count == 0;
+        bar = new FloatingBar(SelectFromBar, Save);
+        displayRefresh = new DispatcherTimer(DispatcherPriority.Background) { Interval = TimeSpan.FromSeconds(1) };
+        displayRefresh.Tick += (_, _) => RefreshDisplays();
+        saveTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(250) };
+        saveTimer.Tick += (_, _) => Save();
+        ShowNotice(warning);
+        RefreshPresetSelector();
+        LoadLayout();
+        Loaded += (_, _) =>
+        {
+            RefreshDisplays();
+            UpdateMode();
+            displayRefresh.Start();
+        };
+        Closed += (_, _) =>
+        {
+            displayRefresh.Stop();
+            SetPreviewActive(false);
+            if (saveTimer.IsEnabled) Save();
+            bar.Close();
+        };
+    }
+
+    private void RefreshDisplays()
+    {
+        var previous = displays;
+        displays = Desktop.GetDisplays();
+        if (!previous.SequenceEqual(displays) && displays.Length > 0) bar.KeepVisible(displays);
+        if (previewActive && Environment.TickCount64 - lastPreviewActivity >= 1000) UpdateCapture();
+    }
+
+    private void SetPreviewActive(bool active)
+    {
+        if (active == previewActive) return;
+        previewActive = active;
+        if (active)
+        {
+            nextPresentation = 0;
+            CompositionTarget.Rendering += RenderPreview;
+        }
+        else
+        {
+            CompositionTarget.Rendering -= RenderPreview;
+            capture.Dispose();
+        }
+    }
+
+    private void RenderPreview(object? sender, EventArgs e)
+    {
+        long now = ((RenderingEventArgs)e).RenderingTime.Ticks;
+        // Allow small compositor jitter while keeping a 60 Hz timeline on higher-refresh displays.
+        if (now + TimeSpan.TicksPerMillisecond < nextPresentation) return;
+        if (nextPresentation == 0 || now - nextPresentation > PreviewInterval) nextPresentation = now;
+        nextPresentation += PreviewInterval;
+        UpdateCapture();
+    }
+
+    private void UpdateCapture()
+    {
+        lastPreviewActivity = Environment.TickCount64;
+        capture.Update(displays, bar.Views, bar.CaptureObstructions());
+        UpdateSourceSummary();
+    }
+
+    private void ToggleMode(object sender, RoutedEventArgs e)
+    {
+        editing = !editing;
+        UpdateMode();
+    }
+
+    private void UpdateMode()
+    {
+        ModeButton.Content = editing ? "完成编辑" : "编辑悬浮栏";
+        ModeHint.Text = editing ? "点击选中技能格，拖动格子移动，拖动边框控制点缩放。" : "显示模式 · 鼠标可穿透悬浮栏。";
+        if (!IsLoaded) return;
+        bar.SetMode(editing, selecting, displays);
+        SetPreviewActive(!selecting && bar.Views.Count > 0);
+    }
+
+    private void ResetBar(object sender, RoutedEventArgs e) => bar.ResetPosition(displays);
+
+    private void AddTile(object sender, RoutedEventArgs e) => PickRegion(null);
+
+    private void ReplaceTile(object sender, RoutedEventArgs e)
+    {
+        if (Selected is { } tile) PickRegion(tile);
+    }
+
+    private void PickRegion(Tile? tile)
+    {
+        selecting = true;
+        RefreshDisplays();
+        UpdateMode();
+        Hide();
+        RegionPicker.ShowAll(displays, region =>
+        {
+            selecting = false;
+            if (region is not null)
+            {
+                if (tile is null)
+                {
+                    tile = AddRegion(region);
+                }
+                else
+                {
+                    tile.Source = region;
+                    bar.Views.First(view => view.Tile == tile).SetStatus("正在捕获");
+                }
+                editing = true;
+                bar.Synchronize();
+                RefreshTileList(tile);
+                Save();
+            }
+            Show();
+            Activate();
+            UpdateMode();
+        });
+    }
+
+    private Tile AddRegion(ScreenRegion region)
+    {
+        int number = 1;
+        while (Current.Tiles.Any(tile => tile.Name == $"技能格 {number}")) number++;
+        var tile = new Tile { Name = $"技能格 {number}", Source = region };
+        if (Current.Tiles.Count > 0)
+        {
+            var last = Current.Tiles[^1];
+            tile.X = last.X + last.Width + 6;
+            tile.Y = last.Y;
+            if (tile.X + tile.Width > 460)
+            {
+                tile.X = 0;
+                tile.Y = Current.Tiles.Max(item => item.Y + item.Height) + 6;
+            }
+        }
+        Current.Tiles.Add(tile);
+        return tile;
+    }
+
+    private void RemoveTile(object sender, RoutedEventArgs e)
+    {
+        if (Selected is not { } tile) return;
+        int index = Current.Tiles.IndexOf(tile);
+        Current.Tiles.RemoveAt(index);
+        bar.Synchronize();
+        RefreshTileList(Current.Tiles.ElementAtOrDefault(Math.Min(index, Current.Tiles.Count - 1)));
+        UpdateMode();
+        Save();
+    }
+
+    private void ChangeAppearance(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (refreshingControls || Selected is not { } tile) return;
+        tile.Scale = ScaleSlider.Value;
+        tile.Opacity = 1 - OpacitySlider.Value;
+        tile.Contrast = ContrastSlider.Value;
+        bar.Synchronize();
+        saveTimer.Stop();
+        saveTimer.Start();
+    }
+
+    private void LowerTile(object sender, RoutedEventArgs e) => MoveLayer(-1);
+    private void RaiseTile(object sender, RoutedEventArgs e) => MoveLayer(1);
+
+    private void MoveLayer(int step)
+    {
+        if (Selected is not { } tile) return;
+        var tiles = Current.Tiles;
+        int index = tiles.IndexOf(tile);
+        int target = index + step;
+        if (index < 0 || target < 0 || target >= tiles.Count) return;
+        (tiles[index], tiles[target]) = (tiles[target], tiles[index]);
+        bar.Synchronize();
+        RefreshTileList(tile);
+        Save();
+    }
+
+    private void SelectTile(object sender, SelectionChangedEventArgs e)
+    {
+        if (!refreshingControls) RefreshSelection();
+    }
+
+    private void SelectFromBar(Tile? tile)
+    {
+        if (Selected == tile) RefreshSelection();
+        else TileList.SelectedItem = tile;
+    }
+
+    private void RefreshTileList(Tile? tile)
+    {
+        refreshingControls = true;
+        TileList.ItemsSource = Current.Tiles.ToArray();
+        TileList.SelectedItem = tile;
+        refreshingControls = false;
+        RefreshSelection();
+    }
+
+    private void RefreshSelection()
+    {
+        var tile = Selected;
+        bar.SelectTile(tile);
+        Appearance.Visibility = tile is null ? Visibility.Collapsed : Visibility.Visible;
+        ReplaceButton.IsEnabled = RemoveButton.IsEnabled = tile is not null;
+        if (tile is null) return;
+        refreshingControls = true;
+        ScaleSlider.Value = tile.Scale;
+        OpacitySlider.Value = 1 - tile.Opacity;
+        ContrastSlider.Value = tile.Contrast;
+        int index = Current.Tiles.IndexOf(tile);
+        LowerButton.IsEnabled = index > 0;
+        RaiseButton.IsEnabled = index < Current.Tiles.Count - 1;
+        refreshingControls = false;
+        UpdateSourceSummary();
+    }
+
+    private void UpdateSourceSummary()
+    {
+        if (Selected is not { } tile) return;
+        string? status = bar.Views.FirstOrDefault(view => view.Tile == tile)?.Status;
+        string summary = $"来源 {tile.Source.Width} × {tile.Source.Height} px";
+        if (status is not null) summary += $" · {status}";
+        if (SourceSummary.Text != summary) SourceSummary.Text = summary;
+    }
+
+    private void CreateLayout(object sender, RoutedEventArgs e)
+    {
+        if (AskLayoutName("新建布局", "", except: null) is not { } name) return;
+        var preset = new LayoutPreset { Name = name };
+        layouts.Presets.Add(preset);
+        layouts.ActiveId = preset.Id;
+        RefreshPresetSelector();
+        LoadLayout();
+        Save();
+    }
+
+    private void RenameLayout(object sender, RoutedEventArgs e)
+    {
+        if (AskLayoutName("重命名布局", Current.Name, Current) is not { } name) return;
+        Current.Name = name;
+        RefreshPresetSelector();
+        Save();
+    }
+
+    private void DeleteLayout(object sender, RoutedEventArgs e)
+    {
+        var preset = Current;
+        if (MessageBox.Show(this, $"删除「{preset.Name}」及其中的技能格？", "删除布局", MessageBoxButton.YesNo,
+            MessageBoxImage.Question, MessageBoxResult.No) != MessageBoxResult.Yes) return;
+        layouts.Presets.Remove(preset);
+        if (layouts.Presets.Count == 0) layouts.Presets.Add(new LayoutPreset());
+        layouts.ActiveId = layouts.Presets[0].Id;
+        RefreshPresetSelector();
+        LoadLayout();
+        Save();
+    }
+
+    private void SwitchLayout(object sender, SelectionChangedEventArgs e)
+    {
+        if (refreshingControls || PresetBox.SelectedItem is not LayoutPreset preset) return;
+        layouts.ActiveId = preset.Id;
+        LoadLayout();
+        Save();
+    }
+
+    private void LoadLayout()
+    {
+        bar.Load(Current);
+        if (Current.Tiles.Count == 0) editing = true;
+        RefreshTileList(Current.Tiles.FirstOrDefault());
+        UpdateMode();
+    }
+
+    private void RefreshPresetSelector()
+    {
+        refreshingControls = true;
+        PresetBox.ItemsSource = layouts.Presets.ToArray();
+        PresetBox.SelectedItem = Current;
+        refreshingControls = false;
+    }
+
+    private string? AskLayoutName(string title, string initial, LayoutPreset? except)
+    {
+        var input = new TextBox { Text = initial, MinWidth = 240, MaxLength = 60, Margin = new Thickness(0, 5, 0, 10) };
+        var label = new Label { Content = "布局名称", Target = input, Padding = new Thickness(0) };
+        var confirm = new Button { Content = "保存", MinWidth = 68, IsDefault = true };
+        var cancel = new Button { Content = "取消", MinWidth = 68, IsCancel = true };
+        var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
+        buttons.Children.Add(confirm);
+        buttons.Children.Add(cancel);
+        var prompt = new StackPanel { Margin = new Thickness(16) };
+        prompt.Children.Add(label);
+        prompt.Children.Add(input);
+        prompt.Children.Add(buttons);
+        var dialog = new Window
+        {
+            Owner = this, Title = title, SizeToContent = SizeToContent.WidthAndHeight, ResizeMode = ResizeMode.NoResize,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner, ShowInTaskbar = false, Content = prompt
+        };
+        confirm.Click += (_, _) =>
+        {
+            string name = input.Text.Trim();
+            if (name.Length == 0 || layouts.Presets.Any(preset => preset != except &&
+                string.Equals(preset.Name, name, StringComparison.OrdinalIgnoreCase)))
+            {
+                MessageBox.Show(dialog, "请输入未被使用的布局名称。", title, MessageBoxButton.OK, MessageBoxImage.Information);
+                input.Focus();
+                return;
+            }
+            dialog.DialogResult = true;
+        };
+        dialog.Loaded += (_, _) => { Keyboard.Focus(input); input.SelectAll(); };
+        return dialog.ShowDialog() == true ? input.Text.Trim() : null;
+    }
+
+    private void Save()
+    {
+        saveTimer.Stop();
+        try
+        {
+            store.Save(layouts);
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            ShowNotice($"布局保存失败：{error.Message}");
+        }
+    }
+
+    private void ShowNotice(string? message)
+    {
+        Notice.Text = message;
+        Notice.Visibility = string.IsNullOrEmpty(message) ? Visibility.Collapsed : Visibility.Visible;
+    }
+}
