@@ -1,6 +1,7 @@
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
@@ -10,12 +11,15 @@ namespace MobaSkillBar;
 public partial class MainWindow : Window
 {
     private const long PreviewInterval = TimeSpan.TicksPerSecond / 60;
+    private const string MixedValueText = "不同值";
     private readonly LayoutStore store = new();
     private readonly LayoutCollection layouts;
     private readonly FloatingBar bar;
     private readonly ScreenCapture capture = new();
     private readonly DispatcherTimer displayRefresh;
     private readonly DispatcherTimer saveTimer;
+    private readonly AppearanceSetting[] appearanceSettings;
+    private Tile[] selectedTiles = [];
     private DisplayInfo[] displays = [];
     private bool editing;
     private bool barHidden;
@@ -25,11 +29,18 @@ public partial class MainWindow : Window
     private long nextPresentation;
     private long lastPreviewActivity;
     private LayoutPreset Current => layouts.Active;
-    private Tile? Selected => TileList.SelectedItems.Count == 1 ? TileList.SelectedItem as Tile : null;
+    private Tile? Selected => selectedTiles.Length == 1 ? selectedTiles[0] : null;
 
     public MainWindow()
     {
         InitializeComponent();
+        appearanceSettings =
+        [
+            new(ScaleSlider, ScaleField, tile => tile.Scale, (tile, value) => tile.Scale = value, 1),
+            new(OpacitySlider, OpacityField, tile => 1 - tile.Opacity, (tile, value) => tile.Opacity = 1 - value, 0),
+            new(ContrastSlider, ContrastField, tile => tile.Contrast, (tile, value) => tile.Contrast = value, 1),
+            new(SaturationSlider, SaturationField, tile => tile.Saturation, (tile, value) => tile.Saturation = value, 1)
+        ];
         layouts = store.Load(out var warning);
         editing = Current.Tiles.Count == 0;
         bar = new FloatingBar(SelectFromBar, Save);
@@ -205,13 +216,45 @@ public partial class MainWindow : Window
 
     private void ChangeAppearance(object sender, RoutedPropertyChangedEventArgs<double> e)
     {
-        if (refreshingControls || Selected is not { } tile) return;
-        tile.Scale = ScaleSlider.Value;
-        tile.Opacity = 1 - OpacitySlider.Value;
-        tile.Contrast = ContrastSlider.Value;
-        tile.Saturation = SaturationSlider.Value;
+        if (!refreshingControls && sender is Slider slider) ApplyAppearance(SettingFor(slider), e.NewValue);
+    }
+
+    private AppearanceSetting SettingFor(Slider slider) => appearanceSettings.First(setting => setting.Slider == slider);
+
+    private static bool SameValue(double left, double right) => Math.Abs(left - right) < 1e-9;
+
+    private void ApplyAppearance(AppearanceSetting setting, double value)
+    {
+        if (selectedTiles.Length == 0) return;
+        value = Math.Clamp(value, setting.Slider.Minimum, setting.Slider.Maximum);
+        bool changed = false;
+        foreach (var tile in selectedTiles)
+        {
+            if (SameValue(setting.Read(tile), value)) continue;
+            setting.Write(tile, value);
+            changed = true;
+        }
+
+        RefreshAppearance(setting);
+        if (!changed) return;
         bar.Synchronize();
         ScheduleSave();
+    }
+
+    private void RefreshAppearance(AppearanceSetting setting)
+    {
+        double first = setting.Read(selectedTiles[0]);
+        bool mixed = selectedTiles.Any(tile => !SameValue(setting.Read(tile), first));
+        setting.DisplayText = mixed ? MixedValueText : PercentageValue.Format(first, setting.Field.Language.GetSpecificCulture());
+        if (setting.Field.Text != setting.DisplayText) setting.Field.Text = setting.DisplayText;
+        setting.Slider.Opacity = mixed ? 0.65 : 1;
+        setting.Slider.IsMoveToPointEnabled = mixed;
+        setting.Slider.ToolTip = mixed ? "不同值，拖动滑块可统一修改" : null;
+
+        bool wasRefreshing = refreshingControls;
+        refreshingControls = true;
+        setting.Slider.Value = first;
+        refreshingControls = wasRefreshing;
     }
 
     private void ScheduleSave()
@@ -222,8 +265,23 @@ public partial class MainWindow : Window
 
     private void ResetSetting(object sender, RoutedEventArgs e)
     {
-        if (((Button)sender).Tag is Slider slider)
-            slider.Value = slider == OpacitySlider ? 0 : 1;
+        if (((Button)sender).Tag is not Slider slider) return;
+        var setting = SettingFor(slider);
+        ApplyAppearance(setting, setting.DefaultValue);
+    }
+
+    private void FocusMixedPercentage(object sender, MouseButtonEventArgs e)
+    {
+        var field = (TextBox)sender;
+        if (field.IsKeyboardFocusWithin || field.Text != MixedValueText) return;
+        field.Focus();
+        e.Handled = true;
+    }
+
+    private void SelectMixedPercentage(object sender, KeyboardFocusChangedEventArgs e)
+    {
+        var field = (TextBox)sender;
+        if (field.Text == MixedValueText) field.SelectAll();
     }
 
     private void SelectPercentage(object sender, MouseButtonEventArgs e)
@@ -234,12 +292,14 @@ public partial class MainWindow : Window
         e.Handled = true;
     }
 
-    private static void FinishPercentage(TextBox field, bool commit)
+    private void FinishPercentage(TextBox field, bool commit)
     {
-        var binding = field.GetBindingExpression(TextBox.TextProperty);
-        if (binding is null) return;
-        if (commit && binding.IsDirty) binding.UpdateSource();
-        binding.UpdateTarget();
+        if (field.Tag is not Slider slider) return;
+        var setting = SettingFor(slider);
+        if (field.Text == setting.DisplayText) return;
+        if (commit && PercentageValue.TryParse(field.Text, field.Language.GetSpecificCulture(), out double value))
+            ApplyAppearance(setting, value);
+        if (field.Text != setting.DisplayText) field.Text = setting.DisplayText;
     }
 
     private void PercentageKeyDown(object sender, KeyEventArgs e)
@@ -275,6 +335,17 @@ public partial class MainWindow : Window
         if (!refreshingControls) RefreshSelection();
     }
 
+    private void ClearListSelectionOnBlankClick(object sender, MouseButtonEventArgs e)
+    {
+        if (e.OriginalSource is not Visual hit || ItemsControl.ContainerFromElement(TileList, hit) is not null) return;
+        for (DependencyObject? element = hit; element is Visual && element != TileList; element = VisualTreeHelper.GetParent(element))
+        {
+            if (element is ScrollBar) return;
+        }
+        TileList.UnselectAll();
+        TileList.Focus();
+    }
+
     private void SelectFromBar(IReadOnlyCollection<Tile> tiles)
     {
         refreshingControls = true;
@@ -295,21 +366,20 @@ public partial class MainWindow : Window
 
     private void RefreshSelection()
     {
+        // A selection change can arrive before a text field loses keyboard focus.
+        if (Keyboard.FocusedElement is TextBox field && field.Tag is Slider) FinishPercentage(field, commit: true);
+        selectedTiles = TileList.SelectedItems.Cast<Tile>().ToArray();
         var tile = Selected;
-        bar.SelectTiles(TileList.SelectedItems.Cast<Tile>());
-        Appearance.Visibility = tile is null ? Visibility.Collapsed : Visibility.Visible;
+        bar.SelectTiles(selectedTiles);
+        Appearance.Visibility = selectedTiles.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
         RenameTileButton.IsEnabled = ReplaceButton.IsEnabled = RemoveButton.IsEnabled = tile is not null;
-        if (tile is null) return;
-        refreshingControls = true;
-        ScaleSlider.Value = tile.Scale;
-        OpacitySlider.Value = 1 - tile.Opacity;
-        ContrastSlider.Value = tile.Contrast;
-        SaturationSlider.Value = tile.Saturation;
-        int index = Current.Tiles.IndexOf(tile);
+        int index = tile is null ? -1 : Current.Tiles.IndexOf(tile);
         LowerButton.IsEnabled = index > 0;
-        RaiseButton.IsEnabled = index < Current.Tiles.Count - 1;
-        refreshingControls = false;
-        UpdateSourceSummary();
+        RaiseButton.IsEnabled = index >= 0 && index < Current.Tiles.Count - 1;
+        if (selectedTiles.Length == 0) return;
+        foreach (var setting in appearanceSettings) RefreshAppearance(setting);
+        if (tile is null) SourceSummary.Text = $"已选中 {selectedTiles.Length} 个技能格";
+        else UpdateSourceSummary();
     }
 
     private void UpdateSourceSummary()
@@ -337,7 +407,6 @@ public partial class MainWindow : Window
         if (AskName("重命名布局", "布局名称", Current.Name,
             layouts.Presets.Where(preset => preset != Current).Select(preset => preset.Name)) is not { } name) return;
         Current.Name = name;
-        RefreshPresetSelector();
         Save();
     }
 
@@ -436,5 +505,11 @@ public partial class MainWindow : Window
     {
         Notice.Text = message;
         Notice.Visibility = string.IsNullOrEmpty(message) ? Visibility.Collapsed : Visibility.Visible;
+    }
+
+    private sealed record AppearanceSetting(Slider Slider, TextBox Field, Func<Tile, double> Read,
+        Action<Tile, double> Write, double DefaultValue)
+    {
+        public string DisplayText { get; set; } = "";
     }
 }

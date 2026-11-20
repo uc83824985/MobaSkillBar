@@ -410,9 +410,12 @@ internal sealed class FloatingBar : Window
         marquee.Width = area.Width;
         marquee.Height = area.Height;
 
-        var hits = views.Values.Where(view => area.Width > 0 && area.Height > 0 &&
-            area.IntersectsWith(new Rect(view.Tile.X, view.Tile.Y, view.Width, view.Height)))
-            .Select(view => view.Tile).ToArray();
+        bool isDrag = area.Width > 0 && area.Height > 0 && (area.Width >= SystemParameters.MinimumHorizontalDragDistance ||
+            area.Height >= SystemParameters.MinimumVerticalDragDistance);
+        Tile[] hits = isDrag
+            ? views.Values.Where(view => area.IntersectsWith(new Rect(view.Tile.X, view.Tile.Y, view.Width, view.Height)))
+                .Select(view => view.Tile).ToArray()
+            : [];
         if (!selected.SetEquals(hits)) select(hits);
     }
 

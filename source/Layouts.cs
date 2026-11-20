@@ -48,13 +48,24 @@ internal sealed class Tile : INotifyPropertyChanged
         Math.Clamp(1600.0 / Math.Max(source.Width, source.Height), 1, MaximumScale);
 }
 
-internal sealed class LayoutPreset
+internal sealed class LayoutPreset : INotifyPropertyChanged
 {
+    private string name = "默认布局";
     public Guid Id { get; set; } = Guid.NewGuid();
-    public string Name { get; set; } = "默认布局";
+    public string Name
+    {
+        get => name;
+        set
+        {
+            if (name == value) return;
+            name = value;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Name)));
+        }
+    }
     public int? Left { get; set; }
     public int? Top { get; set; }
     public List<Tile> Tiles { get; set; } = [];
+    public event PropertyChangedEventHandler? PropertyChanged;
 }
 
 internal sealed class LayoutCollection

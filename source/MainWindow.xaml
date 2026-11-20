@@ -1,12 +1,10 @@
 <Window x:Class="MobaSkillBar.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        xmlns:local="clr-namespace:MobaSkillBar"
         Title="MOBA 技能栏" Width="450" Height="630" MinWidth="415" MinHeight="555"
         Background="#111B25" Foreground="#EAF2F8" FontFamily="Segoe UI, Microsoft YaHei UI"
         FontSize="14" UseLayoutRounding="True">
     <Window.Resources>
-        <local:PercentValueConverter x:Key="PercentValue" />
         <Style TargetType="Button">
             <Setter Property="Padding" Value="9,5" />
             <Setter Property="MinHeight" Value="30" />
@@ -20,8 +18,8 @@
             <Setter Property="HorizontalContentAlignment" Value="Right" />
             <Setter Property="Padding" Value="3,1" />
             <Setter Property="Margin" Value="5,0" />
-            <Setter Property="Text" Value="{Binding Tag.Value, RelativeSource={RelativeSource Self}, Mode=TwoWay,
-                    UpdateSourceTrigger=Explicit, Converter={StaticResource PercentValue}}" />
+            <EventSetter Event="PreviewMouseLeftButtonDown" Handler="FocusMixedPercentage" />
+            <EventSetter Event="GotKeyboardFocus" Handler="SelectMixedPercentage" />
             <EventSetter Event="PreviewMouseDoubleClick" Handler="SelectPercentage" />
             <EventSetter Event="PreviewKeyDown" Handler="PercentageKeyDown" />
             <EventSetter Event="LostKeyboardFocus" Handler="CommitPercentage" />
@@ -71,7 +69,29 @@
             <Button x:Name="RemoveButton" Content="移除技能格" Click="RemoveTile" />
         </StackPanel>
         <ListBox x:Name="TileList" Grid.Row="3" SelectionMode="Extended" MinHeight="65"
+                 PreviewMouseLeftButtonDown="ClearListSelectionOnBlankClick"
                  HorizontalContentAlignment="Stretch" AutomationProperties.Name="技能格" SelectionChanged="SelectTile">
+            <ListBox.ItemContainerStyle>
+                <Style TargetType="ListBoxItem">
+                    <Setter Property="Padding" Value="5,2" />
+                    <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                    <Setter Property="Template">
+                        <Setter.Value>
+                            <ControlTemplate TargetType="ListBoxItem">
+                                <Border x:Name="TileRow" Background="Transparent" Padding="{TemplateBinding Padding}">
+                                    <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}" />
+                                </Border>
+                                <ControlTemplate.Triggers>
+                                    <Trigger Property="IsSelected" Value="True">
+                                        <Setter TargetName="TileRow" Property="Background" Value="{DynamicResource {x:Static SystemColors.HighlightBrushKey}}" />
+                                        <Setter Property="Foreground" Value="{DynamicResource {x:Static SystemColors.HighlightTextBrushKey}}" />
+                                    </Trigger>
+                                </ControlTemplate.Triggers>
+                            </ControlTemplate>
+                        </Setter.Value>
+                    </Setter>
+                </Style>
+            </ListBox.ItemContainerStyle>
             <ListBox.ItemTemplate>
                 <DataTemplate>
                     <DockPanel>
@@ -100,28 +120,28 @@
                 <Label Grid.Row="0" Target="{Binding ElementName=ScaleSlider}" Content="缩放" Foreground="White" Padding="0" />
                 <Slider x:Name="ScaleSlider" Grid.Row="0" Grid.Column="1" Minimum="0.25" Maximum="4" Value="1"
                         SmallChange="0.05" LargeChange="0.25" ValueChanged="ChangeAppearance" />
-                <TextBox Grid.Row="0" Grid.Column="2" Style="{StaticResource PercentageField}" AutomationProperties.Name="缩放百分比"
+                <TextBox x:Name="ScaleField" Grid.Row="0" Grid.Column="2" Style="{StaticResource PercentageField}" AutomationProperties.Name="缩放百分比"
                          Tag="{Binding ElementName=ScaleSlider}" />
                 <Button Grid.Row="0" Grid.Column="3" Style="{StaticResource ResetButtonStyle}" AutomationProperties.Name="复位缩放"
                         Tag="{Binding ElementName=ScaleSlider}" />
                 <Label Grid.Row="1" Target="{Binding ElementName=OpacitySlider}" Content="透明度" Foreground="White" Padding="0" />
                 <Slider x:Name="OpacitySlider" Grid.Row="1" Grid.Column="1" Minimum="0" Maximum="1" Value="0"
                         SmallChange="0.05" LargeChange="0.1" ValueChanged="ChangeAppearance" />
-                <TextBox Grid.Row="1" Grid.Column="2" Style="{StaticResource PercentageField}" AutomationProperties.Name="透明度百分比"
+                <TextBox x:Name="OpacityField" Grid.Row="1" Grid.Column="2" Style="{StaticResource PercentageField}" AutomationProperties.Name="透明度百分比"
                          Tag="{Binding ElementName=OpacitySlider}" />
                 <Button Grid.Row="1" Grid.Column="3" Style="{StaticResource ResetButtonStyle}" AutomationProperties.Name="复位透明度"
                         Tag="{Binding ElementName=OpacitySlider}" />
                 <Label Grid.Row="2" Target="{Binding ElementName=ContrastSlider}" Content="对比度" Foreground="White" Padding="0" />
                 <Slider x:Name="ContrastSlider" Grid.Row="2" Grid.Column="1" Minimum="0.25" Maximum="3" Value="1"
                         SmallChange="0.05" LargeChange="0.25" ValueChanged="ChangeAppearance" />
-                <TextBox Grid.Row="2" Grid.Column="2" Style="{StaticResource PercentageField}" AutomationProperties.Name="对比度百分比"
+                <TextBox x:Name="ContrastField" Grid.Row="2" Grid.Column="2" Style="{StaticResource PercentageField}" AutomationProperties.Name="对比度百分比"
                          Tag="{Binding ElementName=ContrastSlider}" />
                 <Button Grid.Row="2" Grid.Column="3" Style="{StaticResource ResetButtonStyle}" AutomationProperties.Name="复位对比度"
                         Tag="{Binding ElementName=ContrastSlider}" />
                 <Label Grid.Row="3" Target="{Binding ElementName=SaturationSlider}" Content="色度" Foreground="White" Padding="0" />
                 <Slider x:Name="SaturationSlider" Grid.Row="3" Grid.Column="1" Minimum="0" Maximum="2" Value="1"
                         SmallChange="0.05" LargeChange="0.25" ValueChanged="ChangeAppearance" />
-                <TextBox Grid.Row="3" Grid.Column="2" Style="{StaticResource PercentageField}" AutomationProperties.Name="色度百分比"
+                <TextBox x:Name="SaturationField" Grid.Row="3" Grid.Column="2" Style="{StaticResource PercentageField}" AutomationProperties.Name="色度百分比"
                          Tag="{Binding ElementName=SaturationSlider}" />
                 <Button Grid.Row="3" Grid.Column="3" Style="{StaticResource ResetButtonStyle}" AutomationProperties.Name="复位色度"
                         Tag="{Binding ElementName=SaturationSlider}" />
